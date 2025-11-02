@@ -86,6 +86,11 @@ namespace Mass.BulletWithBuff.AmmoPatches
                     return;
                 }
 
+                if (string.IsNullOrEmpty(damage.SourceId))
+                {
+                    // Console.WriteLine($"AmmoPatch: SourceId is null or empty, skipping buff processing");
+                    return;
+                }
                 // Check if there's a corresponding buff configuration
                 if (_bulletBuffMappings.TryGetValue(damage.SourceId, out string buffName))
                 {
