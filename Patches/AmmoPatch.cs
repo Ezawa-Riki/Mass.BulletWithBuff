@@ -28,6 +28,7 @@ namespace Mass.BulletWithBuff.AmmoPatches
             LoadConfig();
         }
 
+        static readonly string nameOfmethod13 = "method_14";
         // Load configuration file
         private static void LoadConfig()
         {
@@ -135,7 +136,7 @@ namespace Mass.BulletWithBuff.AmmoPatches
 
                 // Get method_13 and specify generic parameter as Stimulator
                 MethodInfo method13 = typeof(ActiveHealthController)
-                    .GetMethod("method_13", BindingFlags.Instance | BindingFlags.Public);
+                    .GetMethod(nameOfmethod13, BindingFlags.Instance | BindingFlags.Public);
 
                 if (method13 == null)
                 {
