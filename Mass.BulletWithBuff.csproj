@@ -129,6 +129,7 @@
     <PostBuildEvent>
       mkdir "$(ProjectDir)\..\..\BepInEx\plugins\$(ProjectName)" 2>nul
       copy "$(TargetPath)" "$(ProjectDir)\..\..\BepInEx\plugins\$(ProjectName)\$(TargetFileName)"
+      copy "$(ProjectDir)BulletBuffConfig.json" "$(ProjectDir)\..\..\BepInEx\plugins\$(ProjectName)\BulletBuffConfig.json"
     </PostBuildEvent>
   </PropertyGroup>
 </Project>
