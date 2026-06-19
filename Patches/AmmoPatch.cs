@@ -33,7 +33,7 @@ namespace Mass.BulletWithBuff.AmmoPatches
         // Static constructor to load configuration file
         static AmmoPatch()
         {
-            // LoadConfig();
+             LoadConfig();
 
             _stimulatorType = typeof(ActiveHealthController).GetNestedType("Stimulator", BindingFlags.NonPublic | BindingFlags.Instance);
             if (_stimulatorType == null)
