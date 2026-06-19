@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using Newtonsoft.Json;
+using Comfort.Common;
 
 namespace Mass.BulletWithBuff.AmmoPatches
 {
@@ -22,13 +23,53 @@ namespace Mass.BulletWithBuff.AmmoPatches
         // Stores mappings from bullet IDs to buff names
         private static Dictionary<string, string> _bulletBuffMappings = new Dictionary<string, string>();
 
+        // Reflection fields for accessing private members
+        private static readonly Type _stimulatorType;
+        private static readonly MethodInfo _method13;
+        private static readonly MethodInfo _genericMethod13;
+        private static readonly MethodInfo _method0;  // ClassStimulatorValue.method_0
+        private static readonly Type _actionType;     // Action<Stimulator>
+
         // Static constructor to load configuration file
         static AmmoPatch()
         {
-            LoadConfig();
+            // LoadConfig();
+
+            _stimulatorType = typeof(ActiveHealthController).GetNestedType("Stimulator", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (_stimulatorType == null)
+            {
+                Console.WriteLine("AmmoPatch: Failed to get Stimulator type");
+            }
+
+            _method13 = typeof(ActiveHealthController).GetMethod("method_14", BindingFlags.Instance | BindingFlags.Public);
+            if (_method13 == null)
+            {
+                Console.WriteLine("AmmoPatch: Failed to get method_14");
+            }
+            else if (_stimulatorType != null)
+            {
+                _genericMethod13 = _method13.MakeGenericMethod(_stimulatorType);
+                if (_genericMethod13 == null)
+                {
+                    Console.WriteLine("AmmoPatch: Failed to make generic method for method_14");
+                }
+            }
+
+            _method0 = typeof(ClassStimulatorValue).GetMethod("method_0", BindingFlags.Instance | BindingFlags.Public);
+            if (_method0 == null)
+            {
+                Console.WriteLine("AmmoPatch: Failed to get ClassStimulatorValue.method_0");
+            }
+
+            if (_stimulatorType != null)
+            {
+                _actionType = typeof(Action<>).MakeGenericType(_stimulatorType);
+            }
         }
 
-        static readonly string nameOfmethod13 = "method_14";
+        static private ItemFactoryClass _itemFactoryClass;
+        static private GClass1408 _itemTemplates;
+
         // Load configuration file
         private static void LoadConfig()
         {
@@ -96,7 +137,23 @@ namespace Mass.BulletWithBuff.AmmoPatches
                 if (_bulletBuffMappings.TryGetValue(damage.SourceId, out string buffName))
                 {
                     // Console.WriteLine($"AmmoPatch: Buff ammo detected {damage.SourceId}, preparing to apply {buffName}");
+                    if (buffName == "null")
+                    {
+                        // Console.WriteLine($"AmmoPatch: Buff name is 'null', skipping buff application for {damage.SourceId}");
+                        return;
+                    }
                     ApplyBuffEffect(__instance, damage, bodyPart, buffName);
+                }
+                else
+                {
+                    // Console.WriteLine($"BuffNotFound: {damage.SourceId}");
+                    string buffNameFromItemClass = GetBuffNameFromAmmoItemClass(damage.SourceId);
+                    if (buffNameFromItemClass != "null")
+                    {
+                        // Cache the result for future use
+                        _bulletBuffMappings[damage.SourceId] = buffNameFromItemClass;
+                        ApplyBuffEffect(__instance, damage, bodyPart, buffNameFromItemClass);
+                    }
                 }
             }
             catch (Exception ex)
@@ -105,8 +162,27 @@ namespace Mass.BulletWithBuff.AmmoPatches
             }
         }
 
+        private static string GetBuffNameFromAmmoItemClass(string AmmoId)
+        {
+            _itemFactoryClass ??= Singleton<ItemFactoryClass>.Instance;
+            _itemTemplates ??= _itemFactoryClass.ItemTemplates;
+            string buffName = "null";
+            if (_itemTemplates.TryGetValue(AmmoId, out ItemTemplate AmmoItemTemplate))
+            {
+                string description = AmmoItemTemplate.Description;
+                if (description.StartsWith("Buffs_"))
+                {
+                    buffName = description;
+
+                    Console.WriteLine($"GetBuffNameFromAmmoItemClass: Found buff name {buffName} for ammo ID {AmmoId}");
+                }
+            }
+            return buffName;
+        }
+
         private static void ApplyBuffEffect(ActiveHealthController healthController, DamageInfoStruct damage, EBodyPart bodyPart, string buffName)
         {
+            // Console.WriteLine($"ApplyBuffEffect: Applying {buffName}");
             try
             {
                 // Validate parameters
@@ -116,57 +192,20 @@ namespace Mass.BulletWithBuff.AmmoPatches
                     return;
                 }
 
-                // if (damage.Weapon == null)
-                // {
-                //     Console.WriteLine("ApplyBuffEffect: damage.Weapon is null");
-                //     return;
-                // }
-
-                // Get Stimulator type (protected nested type)
-                Type stimulatorType = typeof(ActiveHealthController).GetNestedType("Stimulator", BindingFlags.NonPublic | BindingFlags.Instance);
-                if (stimulatorType == null)
+                if (_stimulatorType == null || _genericMethod13 == null || _method0 == null || _actionType == null)
                 {
-                    Console.WriteLine("ApplyBuffEffect: Can't get Stimulator type");
+                    Console.WriteLine("ApplyBuffEffect: Reflection cache incomplete, aborting");
                     return;
                 }
-                // Console.WriteLine("ApplyBuffEffect: Get Stimulator type success");
 
                 // Create custom stimulator value object
                 var stimValue = new ClassStimulatorValue(buffName, damage.Weapon, bodyPart);
 
-                // Get method_13 and specify generic parameter as Stimulator
-                MethodInfo method13 = typeof(ActiveHealthController)
-                    .GetMethod(nameOfmethod13, BindingFlags.Instance | BindingFlags.Public);
-
-                if (method13 == null)
-                {
-                    Console.WriteLine("ApplyBuffEffect: Can't find method_13 method");
-                    return;
-                }
-
-                // Apply generic parameter
-                MethodInfo genericMethod13 = method13.MakeGenericMethod(stimulatorType);
-                if (genericMethod13 == null)
-                {
-                    Console.WriteLine("ApplyBuffEffect: Can't make generic method for method_13");
-                    return;
-                }
-                // Console.WriteLine("ApplyBuffEffect: Get and prepare method_13 success");
-
-                // Create callback method
-                Type actionType = typeof(Action<>).MakeGenericType(stimulatorType);
-                MethodInfo method0 = typeof(ClassStimulatorValue).GetMethod("method_0", BindingFlags.Instance | BindingFlags.Public);
-
-                if (method0 == null)
-                {
-                    Console.WriteLine("ApplyBuffEffect: Can't find method_0 method in ClassStimulatorValue");
-                    return;
-                }
 
                 Delegate callback;
                 try
                 {
-                    callback = Delegate.CreateDelegate(actionType, stimValue, method0);
+                    callback = Delegate.CreateDelegate(_actionType, stimValue, _method0);
                 }
                 catch (Exception ex)
                 {
@@ -178,19 +217,19 @@ namespace Mass.BulletWithBuff.AmmoPatches
                 // Prepare parameters for method_13
                 object[] parameters = new object[]
                 {
-                    EBodyPart.Head,    // bodyPart parameter
-                    damage.Weapon,     // effectSourceItem parameter
-                    null,              // strength parameter
-                    null,              // delay parameter
-                    null,              // duration parameter
-                    null,              // residueTime parameter
-                    callback           // initCallback parameter
+                    EBodyPart.Head,
+                    damage.Weapon,
+                    null,
+                    null,
+                    null,
+                    null,
+                    callback
                 };
 
                 // Invoke method_13
                 try
                 {
-                    object result = genericMethod13.Invoke(healthController, parameters);
+                    _genericMethod13.Invoke(healthController, parameters);
                 }
                 catch (TargetInvocationException ex)
                 {
@@ -214,6 +253,24 @@ namespace Mass.BulletWithBuff.AmmoPatches
         public string buffName;
         public Item weapon;
         public EBodyPart bodyPart;
+        private static readonly MethodInfo _storeValuesMethod;
+
+        static ClassStimulatorValue()
+        {
+            Type stimulatorType = typeof(ActiveHealthController).GetNestedType("Stimulator", BindingFlags.NonPublic | BindingFlags.Instance);
+            if (stimulatorType != null)
+            {
+                _storeValuesMethod = stimulatorType.GetMethod("StoreValues", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (_storeValuesMethod == null)
+                {
+                    Console.WriteLine("ClassStimulatorValue: Failed to get StoreValues method");
+                }
+            }
+            else
+            {
+                Console.WriteLine("ClassStimulatorValue: Failed to get Stimulator type");
+            }
+        }
 
         public ClassStimulatorValue(string buffName, Item weapon, EBodyPart bodyPart)
         {
@@ -237,29 +294,26 @@ namespace Mass.BulletWithBuff.AmmoPatches
 
                 string weaponId = null;
                 // Validate if weapon is valid
-                if (weapon == null)
-                {
-                    // Console.WriteLine("ClassStimulatorValue: weapon is null");
-
-                }
-                else
+                if (weapon != null)
                 {
                     weaponId = weapon.TemplateId.ToString();
                     if (string.IsNullOrEmpty(weaponId))
                     {
-                        Console.WriteLine("ClassStimulatorValue: Weapon ID is null or empty or conversion failed");
+                        Console.WriteLine("ClassStimulatorValue: Weapon ID is null or empty");
                         return;
                     }
                 }
-                // Use reflection to find and invoke StoreValues method
-                MethodInfo storeValuesMethod = stimulator.GetType().GetMethod("StoreValues", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
-
+                if (_storeValuesMethod == null)
+                {
+                    Console.WriteLine("ClassStimulatorValue: StoreValues method not cached");
+                    return;
+                }
                 object[] args = new object[] { buffName, weaponId, bodyPart };
 
 
                 // Invoke StoreValues method
-                storeValuesMethod.Invoke(stimulator, args);
+                _storeValuesMethod.Invoke(stimulator, args);
                 // Console.WriteLine("ClassStimulatorValue: StoreValues invoked successfully");
             }
             catch (Exception ex)
