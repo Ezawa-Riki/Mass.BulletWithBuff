@@ -12,6 +12,24 @@ using Comfort.Common;
 
 namespace Mass.BulletWithBuff.AmmoPatches
 {
+    internal static class BulletBuffLog
+    {
+        public static void Info(string message)
+        {
+            Mass.BulletWithBuff.Plugin.LogSource?.LogInfo(message);
+        }
+
+        public static void Warning(string message)
+        {
+            Mass.BulletWithBuff.Plugin.LogSource?.LogWarning(message);
+        }
+
+        public static void Error(string message)
+        {
+            Mass.BulletWithBuff.Plugin.LogSource?.LogError(message);
+        }
+    }
+
     // Configuration file data model
     public class BulletBuffConfig
     {
@@ -20,6 +38,8 @@ namespace Mass.BulletWithBuff.AmmoPatches
 
     internal class AmmoPatch : ModulePatch
     {
+        private const string NoBuffValue = "null";
+
         // Stores mappings from bullet IDs to buff names
         private static Dictionary<string, string> _bulletBuffMappings = new Dictionary<string, string>();
 
@@ -38,27 +58,27 @@ namespace Mass.BulletWithBuff.AmmoPatches
             _stimulatorType = typeof(ActiveHealthController).GetNestedType("Stimulator", BindingFlags.NonPublic | BindingFlags.Instance);
             if (_stimulatorType == null)
             {
-                Console.WriteLine("AmmoPatch: Failed to get Stimulator type");
+                BulletBuffLog.Error("AmmoPatch: Failed to get Stimulator type");
             }
 
             _method13 = typeof(ActiveHealthController).GetMethod("method_14", BindingFlags.Instance | BindingFlags.Public);
             if (_method13 == null)
             {
-                Console.WriteLine("AmmoPatch: Failed to get method_14");
+                BulletBuffLog.Error("AmmoPatch: Failed to get method_14");
             }
             else if (_stimulatorType != null)
             {
                 _genericMethod13 = _method13.MakeGenericMethod(_stimulatorType);
                 if (_genericMethod13 == null)
                 {
-                    Console.WriteLine("AmmoPatch: Failed to make generic method for method_14");
+                    BulletBuffLog.Error("AmmoPatch: Failed to make generic method for method_14");
                 }
             }
 
             _method0 = typeof(ClassStimulatorValue).GetMethod("method_0", BindingFlags.Instance | BindingFlags.Public);
             if (_method0 == null)
             {
-                Console.WriteLine("AmmoPatch: Failed to get ClassStimulatorValue.method_0");
+                BulletBuffLog.Error("AmmoPatch: Failed to get ClassStimulatorValue.method_0");
             }
 
             if (_stimulatorType != null)
@@ -82,7 +102,7 @@ namespace Mass.BulletWithBuff.AmmoPatches
 
                 if (!File.Exists(configPath))
                 {
-                    Console.WriteLine($"AmmoPatch: Configuration file does not exist - {configPath}");
+                    BulletBuffLog.Warning($"AmmoPatch: Configuration file does not exist - {configPath}");
                     return;
                 }
 
@@ -92,24 +112,62 @@ namespace Mass.BulletWithBuff.AmmoPatches
 
                 if (config?.BulletBuffMappings != null)
                 {
-                    _bulletBuffMappings = config.BulletBuffMappings;
-                    Console.WriteLine($"AmmoPatch: Configuration loaded successfully, {_bulletBuffMappings.Count} mappings loaded");
+                    _bulletBuffMappings = SanitizeMappings(config.BulletBuffMappings);
+                    BulletBuffLog.Info($"AmmoPatch: Configuration loaded successfully, {_bulletBuffMappings.Count} mappings loaded");
 
                     // Output loaded mappings for debugging
                     foreach (var mapping in _bulletBuffMappings)
                     {
-                        Console.WriteLine($"AmmoPatch: Ammo ID {mapping.Key} -> Buff {mapping.Value}");
+                        BulletBuffLog.Info($"AmmoPatch: Ammo ID {mapping.Key} -> Buff {mapping.Value}");
                     }
                 }
                 else
                 {
-                    Console.WriteLine("AmmoPatch: Configuration file is empty or invalid");
+                    BulletBuffLog.Warning("AmmoPatch: Configuration file is empty or invalid");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"AmmoPatch: Failed to load configuration file - {ex.Message}\n{ex.StackTrace}");
+                BulletBuffLog.Error($"AmmoPatch: Failed to load configuration file - {ex}");
             }
+        }
+
+        private static Dictionary<string, string> SanitizeMappings(Dictionary<string, string> rawMappings)
+        {
+            var sanitizedMappings = new Dictionary<string, string>();
+            foreach (var mapping in rawMappings)
+            {
+                string ammoId = mapping.Key?.Trim();
+                string buffName = mapping.Value?.Trim();
+
+                if (string.IsNullOrEmpty(ammoId))
+                {
+                    BulletBuffLog.Warning("AmmoPatch: Skipping config entry with empty ammo ID");
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(buffName))
+                {
+                    BulletBuffLog.Warning($"AmmoPatch: Empty buff configured for ammo ID {ammoId}, treating as no buff");
+                    sanitizedMappings[ammoId] = NoBuffValue;
+                    continue;
+                }
+
+                if (string.Equals(buffName, NoBuffValue, StringComparison.OrdinalIgnoreCase))
+                {
+                    sanitizedMappings[ammoId] = NoBuffValue;
+                    continue;
+                }
+
+                if (!buffName.StartsWith("Buffs_", StringComparison.Ordinal))
+                {
+                    BulletBuffLog.Warning($"AmmoPatch: Buff '{buffName}' for ammo ID {ammoId} does not start with 'Buffs_'");
+                }
+
+                sanitizedMappings[ammoId] = buffName;
+            }
+
+            return sanitizedMappings;
         }
 
         protected override MethodBase GetTargetMethod()
@@ -137,7 +195,7 @@ namespace Mass.BulletWithBuff.AmmoPatches
                 if (_bulletBuffMappings.TryGetValue(damage.SourceId, out string buffName))
                 {
                     // Console.WriteLine($"AmmoPatch: Buff ammo detected {damage.SourceId}, preparing to apply {buffName}");
-                    if (buffName == "null")
+                    if (buffName == NoBuffValue)
                     {
                         // Console.WriteLine($"AmmoPatch: Buff name is 'null', skipping buff application for {damage.SourceId}");
                         return;
@@ -148,17 +206,17 @@ namespace Mass.BulletWithBuff.AmmoPatches
                 {
                     // Console.WriteLine($"BuffNotFound: {damage.SourceId}");
                     string buffNameFromItemClass = GetBuffNameFromAmmoItemClass(damage.SourceId);
-                    if (buffNameFromItemClass != "null")
+                    // Cache both positive and negative lookups to avoid repeated template checks on common ammo.
+                    _bulletBuffMappings[damage.SourceId] = buffNameFromItemClass;
+                    if (buffNameFromItemClass != NoBuffValue)
                     {
-                        // Cache the result for future use
-                        _bulletBuffMappings[damage.SourceId] = buffNameFromItemClass;
                         ApplyBuffEffect(__instance, damage, bodyPart, buffNameFromItemClass);
                     }
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"AmmoPatch: Postfix Error - {ex.Message}\n{ex.StackTrace}");
+                BulletBuffLog.Error($"AmmoPatch: Postfix Error - {ex}");
             }
         }
 
@@ -166,15 +224,15 @@ namespace Mass.BulletWithBuff.AmmoPatches
         {
             _itemFactoryClass ??= Singleton<ItemFactoryClass>.Instance;
             _itemTemplates ??= _itemFactoryClass.ItemTemplates;
-            string buffName = "null";
+            string buffName = NoBuffValue;
             if (_itemTemplates.TryGetValue(AmmoId, out ItemTemplate AmmoItemTemplate))
             {
                 string description = AmmoItemTemplate.Description;
-                if (description.StartsWith("Buffs_"))
+                if (!string.IsNullOrEmpty(description) && description.StartsWith("Buffs_", StringComparison.Ordinal))
                 {
                     buffName = description;
 
-                    Console.WriteLine($"GetBuffNameFromAmmoItemClass: Found buff name {buffName} for ammo ID {AmmoId}");
+                    BulletBuffLog.Info($"GetBuffNameFromAmmoItemClass: Found buff name {buffName} for ammo ID {AmmoId}");
                 }
             }
             return buffName;
@@ -188,13 +246,13 @@ namespace Mass.BulletWithBuff.AmmoPatches
                 // Validate parameters
                 if (healthController == null)
                 {
-                    Console.WriteLine("ApplyBuffEffect: healthController is null");
+                    BulletBuffLog.Warning("ApplyBuffEffect: healthController is null");
                     return;
                 }
 
                 if (_stimulatorType == null || _genericMethod13 == null || _method0 == null || _actionType == null)
                 {
-                    Console.WriteLine("ApplyBuffEffect: Reflection cache incomplete, aborting");
+                    BulletBuffLog.Error("ApplyBuffEffect: Reflection cache incomplete, aborting");
                     return;
                 }
 
@@ -209,7 +267,7 @@ namespace Mass.BulletWithBuff.AmmoPatches
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"ApplyBuffEffect: Create delegate failed - {ex.Message}");
+                    BulletBuffLog.Error($"ApplyBuffEffect: Create delegate failed - {ex.Message}");
                     return;
                 }
                 // Console.WriteLine("ApplyBuffEffect: Create callback delegate success");
@@ -234,16 +292,16 @@ namespace Mass.BulletWithBuff.AmmoPatches
                 catch (TargetInvocationException ex)
                 {
                     // Unwrap inner exception
-                    Console.WriteLine($"ApplyBuffEffect: method_13 Invocation exception - {ex.InnerException?.Message}\n{ex.InnerException?.StackTrace}");
+                    BulletBuffLog.Error($"ApplyBuffEffect: method_13 Invocation exception - {ex.InnerException}");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"ApplyBuffEffect: method_13 Invocation exception - {ex.Message}");
+                    BulletBuffLog.Error($"ApplyBuffEffect: method_13 Invocation exception - {ex.Message}");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"ApplyBuffEffect: Error - {ex.Message}\n{ex.StackTrace}");
+                BulletBuffLog.Error($"ApplyBuffEffect: Error - {ex}");
             }
         }
     }
@@ -263,12 +321,12 @@ namespace Mass.BulletWithBuff.AmmoPatches
                 _storeValuesMethod = stimulatorType.GetMethod("StoreValues", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
                 if (_storeValuesMethod == null)
                 {
-                    Console.WriteLine("ClassStimulatorValue: Failed to get StoreValues method");
+                    BulletBuffLog.Error("ClassStimulatorValue: Failed to get StoreValues method");
                 }
             }
             else
             {
-                Console.WriteLine("ClassStimulatorValue: Failed to get Stimulator type");
+                BulletBuffLog.Error("ClassStimulatorValue: Failed to get Stimulator type");
             }
         }
 
@@ -288,7 +346,7 @@ namespace Mass.BulletWithBuff.AmmoPatches
 
                 if (stimulator == null)
                 {
-                    Console.WriteLine("ClassStimulatorValue: stimulator is null");
+                    BulletBuffLog.Warning("ClassStimulatorValue: stimulator is null");
                     return;
                 }
 
@@ -299,14 +357,14 @@ namespace Mass.BulletWithBuff.AmmoPatches
                     weaponId = weapon.TemplateId.ToString();
                     if (string.IsNullOrEmpty(weaponId))
                     {
-                        Console.WriteLine("ClassStimulatorValue: Weapon ID is null or empty");
+                        BulletBuffLog.Warning("ClassStimulatorValue: Weapon ID is null or empty");
                         return;
                     }
                 }
 
                 if (_storeValuesMethod == null)
                 {
-                    Console.WriteLine("ClassStimulatorValue: StoreValues method not cached");
+                    BulletBuffLog.Error("ClassStimulatorValue: StoreValues method not cached");
                     return;
                 }
                 object[] args = new object[] { buffName, weaponId, bodyPart };
@@ -318,7 +376,7 @@ namespace Mass.BulletWithBuff.AmmoPatches
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"ClassStimulatorValue: method_0 error - {ex.Message}\n{ex.StackTrace}");
+                BulletBuffLog.Error($"ClassStimulatorValue: method_0 error - {ex}");
             }
         }
     }
